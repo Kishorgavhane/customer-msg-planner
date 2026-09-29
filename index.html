@@ -51,6 +51,7 @@ let S = load(); let tab = 'campaigns'; let running = null; let editing = null; l
 const MAX_FILES = 10;
 const getFiles = c => c.files || (c.file ? [Object.assign({}, c.file, {key:c.id})] : []);
 const MAX_MB = 100;
+const REASONS = ['Resigned / left company','Wrong number','Not on WhatsApp','Message failed to send','Sent by mistake','Call back later','Customer asked to stop','Other...'];
 const blocked = n => !!(S.dnm && S.dnm[n]);
 const spin = t => t.replace(/\{([^{}|]+(?:\|[^{}|]+)+)\}/g, (m,g) => { const a = g.split('|'); return a[Math.floor(Math.random()*a.length)]; });
 const ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.mp4,.3gp,.mov,.mkv,.avi,.webm,.mp3,.ogg,.opus,.m4a,.aac,.amr,.wav,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf,.odt,.ods,.odp,.zip,.rar,.7z,.vcf,.apk';
@@ -237,16 +238,16 @@ function vDetail(){
   <p><b>${n('sent')}</b> sent, <b>${n('pending')}</b> not sent yet, <b>${n('skipped')}</b> skipped, <b>${n('blocked')}</b> do not message, of ${rows.length}.</p>
   <p>${[['all','All'],['sent','Sent'],['pending','Not sent'],['skipped','Skipped'],['blocked','Blocked']].map(([k,t]) => `<button class="${filt===k?'on':'g'}" data-f="${k}">${t}</button>`).join(' ')} <button class="g" id="dl">Download report CSV</button></p>
   <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
-  <tr style="text-align:left"><th>Name</th><th>Phone</th><th>Status</th><th>Time</th><th>Remark</th><th></th></tr>
-  ${shown.map(r => `<tr style="border-top:1px solid var(--line)"><td>${esc(r.p.name)}</td><td>+${r.p.num}</td><td><span class="tag ${r.st==='sent'?'done':''}">${({sent:'Sent',pending:'Not sent',skipped:'Skipped',blocked:'Do not message'})[r.st]}</span></td><td>${r.t?fmt(r.t):''}</td><td style="max-width:220px">${esc(c.remarks[r.p.num]||'')}</td><td style="white-space:nowrap"><button class="g" data-rk="${r.p.num}">${c.remarks[r.p.num]?'Edit remark':'Add remark'}</button> ${r.st==='blocked'?`<button class="g" data-ub="${r.p.num}">Unblock</button>`:r.st!=='pending'?`<button class="g" data-undo="${r.p.num}">Undo</button>`:`<button class="g" data-bl="${r.p.num}">Block</button>`}</td></tr>`).join('')}
+  <tr style="text-align:left"><th>Name</th><th>Phone</th><th>Status</th><th>Time</th><th>Action</th></tr>
+  ${shown.map(r => `<tr style="border-top:1px solid var(--line)"><td>${esc(r.p.name)}${c.remarks[r.p.num]?`<div class="hint">Reason: ${esc(c.remarks[r.p.num])}</div>`:''}</td><td>+${r.p.num}</td><td><span class="tag ${r.st==='sent'?'done':''}">${({sent:'Sent',pending:'Not sent',skipped:'Skipped',blocked:'Do not message'})[r.st]}</span></td><td>${r.t?fmt(r.t):''}</td><td style="white-space:nowrap">${r.st==='blocked'?`<button class="g" data-ub="${r.p.num}">Unblock</button>`:r.st==='pending'?`<button class="g" data-bl="${r.p.num}">Block</button>`:`<select data-undo="${r.p.num}" style="width:auto"><option value="">Undo...</option>${REASONS.map(x => `<option>${x}</option>`).join('')}</select>`}</td></tr>`).join('')}
   </table></div></section>`;
   $('#bk').onclick = () => { detail=null; render(); };
   $('#rn').onclick = () => { running=c.id; render(); };
   document.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { filt=b.dataset.f; render(); });
-  document.querySelectorAll('[data-rk]').forEach(b => b.onclick = () => { const n = b.dataset.rk, v = prompt('Remark for +'+n+' (leave empty to clear):', c.remarks[n]||''); if (v===null) return; if (v.trim()) c.remarks[n] = v.trim(); else delete c.remarks[n]; save(); render(); });
+
   document.querySelectorAll('[data-bl]').forEach(b => b.onclick = () => { const v = prompt('Block this number in ALL campaigns? Reason (e.g. resigned):', c.remarks[b.dataset.bl]||''); if (v===null) return; S.dnm = S.dnm||{}; S.dnm[b.dataset.bl] = {reason:v.trim(), at:Date.now()}; if (v.trim()) c.remarks[b.dataset.bl] = v.trim(); save(); render(); });
   document.querySelectorAll('[data-ub]').forEach(b => b.onclick = () => { delete S.dnm[b.dataset.ub]; save(); render(); });
-  document.querySelectorAll('[data-undo]').forEach(b => b.onclick = () => { const n = b.dataset.undo, v = prompt('Reason for undo (optional), e.g. resigned, wrong number:', c.remarks[n]||''); if (v===null) return; if (v.trim()) c.remarks[n] = v.trim(); delete c.sent[n]; delete c.skipped[n]; save(); render(); });
+  document.querySelectorAll('[data-undo]').forEach(sel => sel.onchange = () => { const n = sel.dataset.undo; let v = sel.value; if (!v) return; if (v === 'Other...') { v = prompt('Reason for undo:'); if (v === null || !v.trim()) { sel.value = ''; return; } } c.remarks[n] = v.trim(); delete c.sent[n]; delete c.skipped[n]; save(); render(); });
   $('#dl').onclick = () => {
     const q = v => '"'+String(v).replace(/"/g,'""')+'"';
     const csv = 'name,phone,status,time,remark\n' + rows.map(r => [r.p.name, '+'+r.p.num, r.st, r.t?new Date(r.t).toLocaleString():'', c.remarks[r.p.num]||''].map(q).join(',')).join('\n');
