@@ -58,6 +58,11 @@ const getFiles = c => c.files || (c.file ? [Object.assign({}, c.file, {key:c.id}
 const MAX_MB = 100;
 const REASONS = ['Resigned / left company','Wrong number','Not on WhatsApp','Message failed to send','Sent by mistake','Call back later','Customer asked to stop','Other...'];
 const SKIP_REASONS = ['Number not on WhatsApp','Wrong number','Resigned / left company','Not interested','Will call instead','Customer asked to stop','Other...'];
+function personalize(msg, p, mode){
+  const t = fill(spin(msg), p), nm = (p.name||'').trim();
+  if (!mode || !nm || /\{name\}/i.test(msg)) return t;
+  return t.replace(/valued customer/i, m => mode==='replace' ? nm : m+' '+nm);
+}
 const blocked = n => !!(S.dnm && S.dnm[n]);
 const spin = t => t.replace(/\{([^{}|]+(?:\|[^{}|]+)+)\}/g, (m,g) => { const a = g.split('|'); return a[Math.floor(Math.random()*a.length)]; });
 const ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.mp4,.3gp,.mov,.mkv,.avi,.webm,.mp3,.ogg,.opus,.m4a,.aac,.amr,.wav,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf,.odt,.ods,.odp,.zip,.rar,.7z,.vcf,.apk';
@@ -144,6 +149,8 @@ function vCampaigns(){
   <label>Message</label><textarea id="cm">${esc(c?.msg || 'Hello {name}, we have a new update for you. Reply STOP to opt out.')}</textarea>
   <p class="hint">Use variables from your list, like {name}. Keep an opt-out line such as "Reply STOP".</p>
   <p class="hint"><b>Vary the wording:</b> write {Hello|Hi|Namaste} {name} and one option is picked at random for each customer. This makes every message a little different and more natural.</p>
+  <label>Auto customer name</label><select id="cam"><option value="">Off (send the message as written)</option><option value="replace" ${c?.autoName==='replace'?'selected':''}>Replace "Valued Customer" with the customer's name</option><option value="append" ${c?.autoName==='append'?'selected':''}>Add the name after "Valued Customer"</option></select>
+  <p class="hint">Example: "Dear Valued Customer," becomes "Dear Vl Logistics,". You can also write {name} anywhere in the message.</p>
   <label>Preview (first contact in the list) <button class="g" id="sh" type="button" style="padding:2px 10px">Shuffle</button></label><pre id="pv"></pre>
   <label>Attachments (optional, up to ${MAX_FILES} files)</label><input type="file" id="cf" multiple accept="${ACCEPT}">
   <div id="cfl"></div>
@@ -158,8 +165,8 @@ function vCampaigns(){
   function drawDraft(){ const el = $('#cfl'); el.innerHTML = draft.map((f,i) => `<div class="bar" style="padding:4px 0"><span>${esc(f.name)} <span class="hint">(${mb(f.size)})</span></span><button class="g" data-x="${i}">Remove</button></div>`).join('') || '<p class="hint">No files selected.</p>';
     el.querySelectorAll('[data-x]').forEach(b => b.onclick = () => { draft.splice(+b.dataset.x,1); drawDraft(); }); }
   drawDraft();
-  const pv = () => { const L = S.lists.find(l => l.id===$('#cl').value), p = (L && L.contacts[0]) || {name:'Customer'}; $('#pv').textContent = fill(spin($('#cm').value), p); };
-  $('#cm').oninput = pv; $('#cl').onchange = pv; $('#sh').onclick = pv; pv();
+  const pv = () => { const L = S.lists.find(l => l.id===$('#cl').value), p = (L && L.contacts[0]) || {name:'Customer'}; $('#pv').textContent = personalize($('#cm').value, p, $('#cam').value); };
+  $('#cam').onchange = pv; $('#cm').oninput = pv; $('#cl').onchange = pv; $('#sh').onclick = pv; pv();
   $('#cf').onchange = e => { Array.from(e.target.files).forEach(f => {
       if (f.size > MAX_MB*1048576) return alert(f.name+' is larger than '+MAX_MB+' MB.');
       if (draft.length >= MAX_FILES) return alert('Maximum '+MAX_FILES+' files per campaign.');
@@ -167,7 +174,7 @@ function vCampaigns(){
     e.target.value = ''; drawDraft(); };
   $('#cs').onclick = async () => {
     if (!S.lists.length) return alert('Add a contact list first.');
-    const o = {name:$('#cn').value.trim()||'Untitled', listId:$('#cl').value, msg:$('#cm').value, when:$('#cw').value?new Date($('#cw').value).getTime():0, delay:Math.max(MIN_DELAY,+$('#cd').value||MIN_DELAY), daily:+$('#cq').value||50};
+    const o = {name:$('#cn').value.trim()||'Untitled', listId:$('#cl').value, msg:$('#cm').value, when:$('#cw').value?new Date($('#cw').value).getTime():0, delay:Math.max(MIN_DELAY,+$('#cd').value||MIN_DELAY), daily:+$('#cq').value||50, autoName:$('#cam').value};
     const id = c ? c.id : uid();
     try {
       const keep = new Set(draft.filter(f => f.key).map(f => f.key));
@@ -194,7 +201,7 @@ function vRun(){
   const wait = Math.max(0, Math.ceil((S.lastSend + c.delay*1000 - Date.now())/1000));
   const capped = today >= c.daily;
   if (!nx) { $('#view').innerHTML = `<section><h2>${esc(c.name)} is finished</h2><p>All contacts have been processed.</p><button id="bk">Back</button></section>`; $('#bk').onclick = () => { running=null; render(); }; return; }
-  const text = fill(spin(c.msg), nx), files = getFiles(c);
+  const text = personalize(c.msg, nx, c.autoName), files = getFiles(c);
   $('#view').innerHTML = `<section><div class="bar"><h2>${esc(c.name)}</h2><button class="g" id="bk">Back</button></div>
   <p class="hint">Today ${today}/${c.daily}. Remaining in this campaign: ${pending(c).length}.</p>
   <p><b>Next:</b> ${esc(nx.name||'(no name)')} (+${nx.num})</p><pre>${esc(text)}</pre>
