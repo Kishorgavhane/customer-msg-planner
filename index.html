@@ -47,7 +47,9 @@ const MIN_DELAY = 40;
 const $ = s => document.querySelector(s);
 const esc = s => String(s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const uid = () => Math.random().toString(36).slice(2,9);
-let S = load(); let tab = 'campaigns'; let running = null; let editing = null; let detail = null; let filt = 'all'; let newFile = null;
+let S = load(); let tab = 'campaigns'; let running = null; let editing = null; let detail = null; let filt = 'all'; let newFile = null; let draft = [];
+const MAX_FILES = 10;
+const getFiles = c => c.files || (c.file ? [Object.assign({}, c.file, {key:c.id})] : []);
 const MAX_MB = 100;
 const ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.mp4,.3gp,.mov,.mkv,.avi,.webm,.mp3,.ogg,.opus,.m4a,.aac,.amr,.wav,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf,.odt,.ods,.odp,.zip,.rar,.7z,.vcf,.apk';
 function idb(){ return new Promise((res,rej) => { const r = indexedDB.open('cm-files',1); r.onupgradeneeded = () => r.result.createObjectStore('f'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
@@ -117,6 +119,7 @@ function vCampaigns(){
   if (running) return vRun();
   if (detail) return vDetail();
   const c = editing ? S.campaigns.find(x => x.id===editing) : null;
+  draft = c ? getFiles(c).map(f => Object.assign({}, f)) : [];
   const dt = c && c.when ? new Date(c.when - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
   $('#view').innerHTML = `
   <section><h2>${c?'Edit':'New'} campaign</h2>
@@ -124,10 +127,9 @@ function vCampaigns(){
   <div><label>Contact list</label><select id="cl">${S.lists.map(l => `<option value="${l.id}" ${c?.listId===l.id?'selected':''}>${esc(l.name)} (${l.contacts.length})</option>`).join('')}</select></div></div>
   <label>Message</label><textarea id="cm">${esc(c?.msg || 'Hello {name}, we have a new update for you. Reply STOP to opt out.')}</textarea>
   <p class="hint">Use variables from your list, like {name}. Keep an opt-out line such as "Reply STOP".</p>
-  <label>Attachment (optional)</label><input type="file" id="cf" accept="${ACCEPT}">
-  <p class="hint" id="cfi">${c?.file ? 'Current file: '+esc(c.file.name)+' ('+mb(c.file.size)+'). Choose a new file to replace it.' : 'No file selected.'}</p>
-  ${c?.file ? '<label style="font-weight:normal"><input type="checkbox" id="crm" style="width:auto"> Remove current attachment</label>' : ''}
-  <p class="hint">Images, video, audio, PDF, Word, Excel, PowerPoint, text, CSV, ZIP and more. Up to ${MAX_MB} MB. WhatsApp cannot receive a file through a link, so you attach it in each chat (the Send screen makes this one click).</p>
+  <label>Attachments (optional, up to ${MAX_FILES} files)</label><input type="file" id="cf" multiple accept="${ACCEPT}">
+  <div id="cfl"></div>
+<p class="hint">You can mix different types: images, video, audio, PDF, Word, Excel, PowerPoint, text, CSV, ZIP and more. Up to ${MAX_MB} MB each. WhatsApp cannot receive files through a link, so you attach them in each chat (the Send screen makes this quick).</p>
   <div class="row"><div><label>Start at</label><input type="datetime-local" id="cw" value="${dt}"></div>
   <div><label>Delay between chats (seconds, minimum ${MIN_DELAY})</label><input type="number" id="cd" min="${MIN_DELAY}" value="${c?.delay||MIN_DELAY}"></div>
   <div><label>Daily limit</label><input type="number" id="cq" min="1" value="${c?.daily||50}"></div></div>
@@ -135,17 +137,28 @@ function vCampaigns(){
   ${S.campaigns.map(k => { const st = status(k), L = S.lists.find(l=>l.id===k.listId); return `<div class="card"><div class="bar"><div><a href="#" data-vw="${k.id}" style="color:var(--accent);font-weight:bold">${esc(k.name)}</a> <span class="tag ${st}">${st==='due'?'Ready to send':st}</span>
   <div class="hint">${esc(L?.name||'List missing')}. Starts: ${fmt(k.when)}. Sent ${Object.keys(k.sent||{}).length} of ${L?.contacts.length||0}. Today ${sentToday(k)}/${k.daily}.</div></div>
   <div><button class="g" data-vw="${k.id}">View sent status</button> <button data-run="${k.id}" ${st==='done'||!L?'disabled':''}>Run</button> <button class="g" data-ed="${k.id}">Edit</button> <button class="g" data-rm="${k.id}">Delete</button></div></div></div>`; }).join('') || '<p class="hint">No campaigns yet. Add a contact list first, then create a campaign.</p>'}`;
-  $('#cf').onchange = e => { const f = e.target.files[0]; if (!f) { newFile=null; return; }
-    if (f.size > MAX_MB*1048576) { alert('File is larger than '+MAX_MB+' MB.'); e.target.value=''; newFile=null; return; }
-    newFile = f; $('#cfi').textContent = 'Selected: '+f.name+' ('+mb(f.size)+')'; };
+  function drawDraft(){ const el = $('#cfl'); el.innerHTML = draft.map((f,i) => `<div class="bar" style="padding:4px 0"><span>${esc(f.name)} <span class="hint">(${mb(f.size)})</span></span><button class="g" data-x="${i}">Remove</button></div>`).join('') || '<p class="hint">No files selected.</p>';
+    el.querySelectorAll('[data-x]').forEach(b => b.onclick = () => { draft.splice(+b.dataset.x,1); drawDraft(); }); }
+  drawDraft();
+  $('#cf').onchange = e => { Array.from(e.target.files).forEach(f => {
+      if (f.size > MAX_MB*1048576) return alert(f.name+' is larger than '+MAX_MB+' MB.');
+      if (draft.length >= MAX_FILES) return alert('Maximum '+MAX_FILES+' files per campaign.');
+      draft.push({name:f.name, type:f.type, size:f.size, file:f}); });
+    e.target.value = ''; drawDraft(); };
   $('#cs').onclick = async () => {
     if (!S.lists.length) return alert('Add a contact list first.');
     const o = {name:$('#cn').value.trim()||'Untitled', listId:$('#cl').value, msg:$('#cm').value, when:$('#cw').value?new Date($('#cw').value).getTime():0, delay:Math.max(MIN_DELAY,+$('#cd').value||MIN_DELAY), daily:+$('#cq').value||50};
     const id = c ? c.id : uid();
     try {
-      if (newFile) { await idbPut(id, newFile); o.file = {name:newFile.name, type:newFile.type, size:newFile.size}; }
-      else if (c && $('#crm') && $('#crm').checked) { await idbDel(id); o.file = null; }
-    } catch(e){ alert('Could not store the attachment in this browser.'); }
+      const keep = new Set(draft.filter(f => f.key).map(f => f.key));
+      for (const old of (c ? getFiles(c) : [])) if (!keep.has(old.key)) await idbDel(old.key);
+      const files = [];
+      for (const f of draft) {
+        if (f.key) files.push({name:f.name, type:f.type, size:f.size, key:f.key});
+        else { const key = uid(); await idbPut(key, f.file); files.push({name:f.name, type:f.type, size:f.size, key}); }
+      }
+      o.files = files; o.file = null;
+    } catch(e){ alert('Could not store the attachments in this browser.'); }
     if (c) Object.assign(c, o, {notified:false}); else S.campaigns.push(Object.assign({id, sent:{}}, o));
     newFile = null; editing = null; save(); render();
   };
@@ -153,7 +166,7 @@ function vCampaigns(){
   document.querySelectorAll('[data-vw]').forEach(b => b.onclick = e => { e.preventDefault(); detail=b.dataset.vw; filt='all'; render(); });
   document.querySelectorAll('[data-run]').forEach(b => b.onclick = () => { running=b.dataset.run; render(); });
   document.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => { editing=b.dataset.ed; render(); scrollTo(0,0); });
-  document.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { if (confirm('Delete this campaign?')) { idbDel(b.dataset.rm); S.campaigns = S.campaigns.filter(k=>k.id!==b.dataset.rm); save(); render(); } });
+  document.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { if (confirm('Delete this campaign?')) { getFiles(S.campaigns.find(k=>k.id===b.dataset.rm)).forEach(f => idbDel(f.key)); S.campaigns = S.campaigns.filter(k=>k.id!==b.dataset.rm); save(); render(); } });
 }
 
 function vRun(){
@@ -161,26 +174,30 @@ function vRun(){
   const wait = Math.max(0, Math.ceil((S.lastSend + c.delay*1000 - Date.now())/1000));
   const capped = today >= c.daily;
   if (!nx) { $('#view').innerHTML = `<section><h2>${esc(c.name)} is finished</h2><p>All contacts have been processed.</p><button id="bk">Back</button></section>`; $('#bk').onclick = () => { running=null; render(); }; return; }
-  const text = fill(c.msg, nx);
+  const text = fill(c.msg, nx), files = getFiles(c);
   $('#view').innerHTML = `<section><div class="bar"><h2>${esc(c.name)}</h2><button class="g" id="bk">Back</button></div>
   <p class="hint">Today ${today}/${c.daily}. Remaining in this campaign: ${pending(c).length}.</p>
   <p><b>Next:</b> ${esc(nx.name||'(no name)')} (+${nx.num})</p><pre>${esc(text)}</pre>
   ${capped ? '<p class="warn" style="color:var(--warn)">Daily limit reached. Continue tomorrow.</p>' : wait>0 ? `<div class="big" id="cdw">${wait}s</div><p class="hint" style="text-align:center">Wait before opening the next chat.</p>` : ''}
-  ${c.file ? `<div class="card" style="margin:12px 0"><b>Attachment:</b> ${esc(c.file.name)} (${mb(c.file.size)})
-  <p class="hint">After the chat opens, attach this file with the paperclip button, then press Send.</p>
-  <button class="g" id="fdl">Download file</button> ${/^image\//.test(c.file.type)?'<button class="g" id="fcp">Copy image (then Ctrl+V in chat)</button> ':''}${navigator.canShare?'<button class="g" id="fsh">Share file (phone)</button>':''}</div>` : ''}
+  ${files.length ? `<div class="card" style="margin:12px 0"><b>Attachments (${files.length})</b>
+  <p class="hint">After the chat opens, attach these files with the paperclip button, then press Send.</p>
+  ${files.map((f,i) => `<div class="bar" style="padding:4px 0"><span>${esc(f.name)} <span class="hint">(${mb(f.size)})</span></span><span><button class="g" data-fd="${i}">Download</button>${/^image\//.test(f.type)?` <button class="g" data-fc="${i}">Copy</button>`:''}</span></div>`).join('')}
+  <p style="margin:8px 0 0"><button class="g" id="fda">Download all</button> ${navigator.canShare?'<button class="g" id="fsa">Share all (phone)</button>':''}</p></div>` : ''}
   <p style="text-align:center"><button id="go" ${capped||wait>0?'disabled':''}>Open chat and mark as sent</button> <button class="g" id="sk">Skip this contact</button></p>
   <p class="hint">Press Send in WhatsApp, then return to this tab. Keep this tab open.</p></section>`;
   $('#bk').onclick = () => { running=null; detail=c.id; render(); };
   $('#sk').onclick = () => { c.skipped = c.skipped||{}; c.skipped[nx.num] = Date.now(); save(); render(); };
-  if (c.file) {
-    const getF = async () => { const b = await idbGet(c.id); if (!b) throw 0; return b; };
-    $('#fdl').onclick = async () => { try { const b = await getF(); const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = c.file.name; a.click(); } catch(e){ alert('Attachment not found. Edit the campaign and upload it again.'); } };
-    if ($('#fcp')) $('#fcp').onclick = async () => { try {
-      const bmp = await createImageBitmap(await getF()); const cv = document.createElement('canvas'); cv.width = bmp.width; cv.height = bmp.height; cv.getContext('2d').drawImage(bmp,0,0);
+  if (files.length) {
+    const blobOf = async f => { const b = await idbGet(f.key); if (!b) throw 0; return b; };
+    const dl = async f => { const a = document.createElement('a'); a.href = URL.createObjectURL(await blobOf(f)); a.download = f.name; a.click(); };
+    const missing = () => alert('File not found. Edit the campaign and upload it again.');
+    document.querySelectorAll('[data-fd]').forEach(b => b.onclick = async () => { try { await dl(files[+b.dataset.fd]); } catch(e){ missing(); } });
+    document.querySelectorAll('[data-fc]').forEach(b => b.onclick = async () => { try {
+      const bmp = await createImageBitmap(await blobOf(files[+b.dataset.fc])); const cv = document.createElement('canvas'); cv.width = bmp.width; cv.height = bmp.height; cv.getContext('2d').drawImage(bmp,0,0);
       const png = await new Promise(r => cv.toBlob(r,'image/png')); await navigator.clipboard.write([new ClipboardItem({'image/png':png})]); alert('Image copied. Open the chat and press Ctrl+V.');
-    } catch(e){ alert('Copy is not supported here. Use Download file instead.'); } };
-    if ($('#fsh')) $('#fsh').onclick = async () => { try { const f = new File([await getF()], c.file.name, {type:c.file.type}); await navigator.share({files:[f], text:text}); } catch(e){} };
+    } catch(e){ alert('Copy is not supported here. Use Download instead.'); } });
+    $('#fda').onclick = async () => { try { for (const f of files) { await dl(f); await new Promise(r => setTimeout(r,500)); } } catch(e){ missing(); } };
+    if ($('#fsa')) $('#fsa').onclick = async () => { try { const fs = await Promise.all(files.map(async f => new File([await blobOf(f)], f.name, {type:f.type}))); await navigator.share({files:fs, text:text}); } catch(e){} };
   }
   $('#go').onclick = () => {
     window.open('https://wa.me/'+nx.num+'?text='+encodeURIComponent(text), '_blank', 'noopener');
