@@ -43,7 +43,12 @@ pre{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);borde
 </main>
 
 <script>
-const MIN_DELAY = 40;
+const MIN_DELAY = 10;
+let readyFlag = false, lastBanner = null;
+function beep(){ try { const a = new (window.AudioContext||window.webkitAudioContext)(), o = a.createOscillator(), g = a.createGain(); o.connect(g); g.connect(a.destination); o.frequency.value = 880; g.gain.value = .2; o.start(); setTimeout(() => { o.stop(); a.close(); }, 400); } catch(e){} }
+function notify(title, body){ try { if ('Notification' in window && Notification.permission==='granted') new Notification(title, {body, tag:'cm-ready', requireInteraction:false}); } catch(e){} }
+function askNotif(){ try { Notification.requestPermission().then(() => { lastBanner = null; banner(); }); } catch(e){ alert('Notifications are not supported in this browser.'); } }
+document.addEventListener('visibilitychange', () => { if (!document.hidden) readyFlag = false; });
 const $ = s => document.querySelector(s);
 const esc = s => String(s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const uid = () => Math.random().toString(36).slice(2,9);
@@ -218,6 +223,7 @@ function vRun(){
   $('#op').value = S.opener || (mobile ? 'link' : 'web');
   $('#op').onchange = () => { S.opener = $('#op').value; save(); };
   $('#go').onclick = () => {
+    readyFlag = false; document.title = 'Campaign Manager';
     const mode = $('#op').value, q = 'phone='+nx.num+'&text='+encodeURIComponent(text);
     if (mode === 'web') window.open('https://web.whatsapp.com/send?'+q, 'wa_chat');
     else if (mode === 'app') { const a = document.createElement('a'); a.href = 'whatsapp://send?'+q; document.body.appendChild(a); a.click(); a.remove(); }
@@ -265,19 +271,25 @@ function vBackup(){
 /* ---------- scheduler ---------- */
 function banner(){
   const due = S.campaigns.filter(c => status(c)==='due');
-  $('#banner').innerHTML = due.length ? `<div class="banner">Ready to send: ${due.map(c=>esc(c.name)).join(', ')}. Open the Campaigns tab and press Run.</div>` : '';
+  let h = due.length ? `<div class="banner">Ready to send: ${due.map(c=>esc(c.name)).join(', ')}. Open the Campaigns tab and press Run.</div>` : '';
+  if ('Notification' in window && Notification.permission !== 'granted') {
+    h += location.protocol==='file:'
+      ? '<p class="hint">Notifications do not work when the file is opened from your computer. Use your GitHub Pages link (https) to get them. A beep and the tab title alert still work.</p>'
+      : '<p class="hint">Notifications are off. <button class="g" onclick="askNotif()" style="padding:2px 10px">Turn on notifications</button></p>';
+  }
+  if (h !== lastBanner) { lastBanner = h; $('#banner').innerHTML = h; }
 }
 function checkDue(){
   S.campaigns.forEach(c => { if (status(c)==='due' && !c.notified) {
     c.notified = true; save();
     try { if ('Notification' in window && Notification.permission==='granted') new Notification('Campaign ready', {body:c.name+' is ready to send.'}); } catch(e){}
-    document.title = '(!) Campaign ready';
+    document.title = '(!) Campaign ready'; beep();
   }});
-  if (!S.campaigns.some(c => status(c)==='due')) document.title = 'Campaign Manager';
+  if (!S.campaigns.some(c => status(c)==='due') && !readyFlag) document.title = 'Campaign Manager';
   banner();
   if (running && tab==='campaigns') {
     const c = S.campaigns.find(x=>x.id===running), w = Math.max(0, Math.ceil((S.lastSend + c.delay*1000 - Date.now())/1000));
-    const el = $('#cdw'); if (el) { if (w>0) el.textContent = w+'s'; else render(); }
+    const el = $('#cdw'); if (el) { if (w>0) el.textContent = w+'s'; else { readyFlag = true; document.title = '(!) Next chat ready'; beep(); notify('Next chat is ready', 'Delay finished. Open the next chat for '+c.name+'.'); render(); } }
   }
 }
 try { if ('Notification' in window && Notification.permission==='default') Notification.requestPermission(); } catch(e){}
