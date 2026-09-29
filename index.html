@@ -57,6 +57,7 @@ const MAX_FILES = 10;
 const getFiles = c => c.files || (c.file ? [Object.assign({}, c.file, {key:c.id})] : []);
 const MAX_MB = 100;
 const REASONS = ['Resigned / left company','Wrong number','Not on WhatsApp','Message failed to send','Sent by mistake','Call back later','Customer asked to stop','Other...'];
+const SKIP_REASONS = ['Number not on WhatsApp','Wrong number','Resigned / left company','Not interested','Will call instead','Customer asked to stop','Other...'];
 const blocked = n => !!(S.dnm && S.dnm[n]);
 const spin = t => t.replace(/\{([^{}|]+(?:\|[^{}|]+)+)\}/g, (m,g) => { const a = g.split('|'); return a[Math.floor(Math.random()*a.length)]; });
 const ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.mp4,.3gp,.mov,.mkv,.avi,.webm,.mp3,.ogg,.opus,.m4a,.aac,.amr,.wav,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf,.odt,.ods,.odp,.zip,.rar,.7z,.vcf,.apk';
@@ -71,7 +72,7 @@ function save(){ try { localStorage.setItem('cm-data', JSON.stringify(S)); } cat
 
 /* ---------- helpers ---------- */
 function parseCSV(text){
-  const rows = text.split(/\r?\n/).filter(l => l.trim());
+  const rows = text.replace(/^\ufeff/,'').split(/\r?\n/).filter(l => l.trim());
   const split = l => (l.match(/("([^"]|"")*"|[^,;\t]*)([,;\t]|$)/g)||[]).map(x => x.replace(/[,;\t]$/,'').replace(/^"|"$/g,'').replace(/""/g,'"').trim()).slice(0,-1);
   if (!rows.length) return [];
   let head = split(rows[0]).map(h => h.toLowerCase());
@@ -203,10 +204,10 @@ function vRun(){
   ${files.map((f,i) => `<div class="bar" style="padding:4px 0"><span>${esc(f.name)} <span class="hint">(${mb(f.size)})</span></span><span><button class="g" data-fd="${i}">Download</button>${/^image\//.test(f.type)?` <button class="g" data-fc="${i}">Copy</button>`:''}</span></div>`).join('')}
   <p style="margin:8px 0 0"><button class="g" id="fda">Download all</button> ${navigator.canShare?'<button class="g" id="fsa">Share all (phone)</button>':''}</p></div>` : ''}
   <p class="hint" style="text-align:center">Open chats in: <select id="op" style="width:auto"><option value="web">WhatsApp Web (direct)</option><option value="app">WhatsApp Desktop app</option><option value="link">Default link (extra click)</option></select></p>
-  <p style="text-align:center"><button id="go" ${capped||wait>0?'disabled':''}>Open chat and mark as sent</button> <button class="g" id="sk">Skip this contact</button></p>
+  <p style="text-align:center"><button id="go" ${capped||wait>0?'disabled':''}>Open chat and mark as sent</button> <select id="sk" style="width:auto"><option value="">Skip this contact...</option>${SKIP_REASONS.map(x => `<option>${x}</option>`).join('')}</select></p>
   <p class="hint">Press Send in WhatsApp, then return to this tab. Keep this tab open.</p></section>`;
   $('#bk').onclick = () => { running=null; detail=c.id; render(); };
-  $('#sk').onclick = () => { c.skipped = c.skipped||{}; c.skipped[nx.num] = Date.now(); save(); render(); };
+  $('#sk').onchange = () => { let v = $('#sk').value; if (!v) return; if (v === 'Other...') { v = prompt('Reason for skipping:'); if (v === null || !v.trim()) { $('#sk').value = ''; return; } } c.skipped = c.skipped||{}; c.remarks = c.remarks||{}; c.skipped[nx.num] = Date.now(); c.remarks[nx.num] = v.trim(); save(); render(); };
   if (files.length) {
     const blobOf = async f => { const b = await idbGet(f.key); if (!b) throw 0; return b; };
     const dl = async f => { const a = document.createElement('a'); a.href = URL.createObjectURL(await blobOf(f)); a.download = f.name; a.click(); };
