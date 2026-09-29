@@ -183,6 +183,7 @@ function vRun(){
   <p class="hint">After the chat opens, attach these files with the paperclip button, then press Send.</p>
   ${files.map((f,i) => `<div class="bar" style="padding:4px 0"><span>${esc(f.name)} <span class="hint">(${mb(f.size)})</span></span><span><button class="g" data-fd="${i}">Download</button>${/^image\//.test(f.type)?` <button class="g" data-fc="${i}">Copy</button>`:''}</span></div>`).join('')}
   <p style="margin:8px 0 0"><button class="g" id="fda">Download all</button> ${navigator.canShare?'<button class="g" id="fsa">Share all (phone)</button>':''}</p></div>` : ''}
+  <p class="hint" style="text-align:center">Open chats in: <select id="op" style="width:auto"><option value="web">WhatsApp Web (direct)</option><option value="app">WhatsApp Desktop app</option><option value="link">Default link (extra click)</option></select></p>
   <p style="text-align:center"><button id="go" ${capped||wait>0?'disabled':''}>Open chat and mark as sent</button> <button class="g" id="sk">Skip this contact</button></p>
   <p class="hint">Press Send in WhatsApp, then return to this tab. Keep this tab open.</p></section>`;
   $('#bk').onclick = () => { running=null; detail=c.id; render(); };
@@ -199,8 +200,14 @@ function vRun(){
     $('#fda').onclick = async () => { try { for (const f of files) { await dl(f); await new Promise(r => setTimeout(r,500)); } } catch(e){ missing(); } };
     if ($('#fsa')) $('#fsa').onclick = async () => { try { const fs = await Promise.all(files.map(async f => new File([await blobOf(f)], f.name, {type:f.type}))); await navigator.share({files:fs, text:text}); } catch(e){} };
   }
+  const mobile = /Android|iPhone|iPad/i.test(navigator.userAgent);
+  $('#op').value = S.opener || (mobile ? 'link' : 'web');
+  $('#op').onchange = () => { S.opener = $('#op').value; save(); };
   $('#go').onclick = () => {
-    window.open('https://wa.me/'+nx.num+'?text='+encodeURIComponent(text), '_blank', 'noopener');
+    const mode = $('#op').value, q = 'phone='+nx.num+'&text='+encodeURIComponent(text);
+    if (mode === 'web') window.open('https://web.whatsapp.com/send?'+q, 'wa_chat');
+    else if (mode === 'app') { const a = document.createElement('a'); a.href = 'whatsapp://send?'+q; document.body.appendChild(a); a.click(); a.remove(); }
+    else window.open('https://wa.me/'+nx.num+'?text='+encodeURIComponent(text), '_blank', 'noopener');
     c.sent[nx.num] = Date.now(); S.lastSend = Date.now(); save(); render();
   };
 }
