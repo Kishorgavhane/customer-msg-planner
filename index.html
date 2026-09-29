@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campaign Manager</title>
+<style>
+:root{--bg:#f6f7f4;--ink:#16302b;--mute:#5d716c;--card:#fff;--line:#d9e0dc;--accent:#0f6b57;--on:#fff;--warn:#a4570d;--soft:#e6efe9}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1917;--ink:#e4efeb;--mute:#93a8a2;--card:#16231f;--line:#2a3d37;--accent:#3cc9a1;--on:#06211a;--warn:#e9a55a;--soft:#1b2e28}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Georgia,serif}
+main{max-width:900px;margin:0 auto;padding:20px 16px 64px}
+h1{margin:0 0 4px;font-size:1.9rem}h2{font-size:1.15rem;margin:0 0 8px}
+.sub{color:var(--mute);margin:0 0 16px}
+nav{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+section,.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+label{display:block;font-weight:bold;margin:10px 0 4px}
+input,textarea,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+textarea{min-height:110px;resize:vertical}
+button{font:inherit;cursor:pointer;border-radius:6px;padding:8px 14px;border:1px solid var(--accent);background:var(--accent);color:var(--on)}
+button.g{background:transparent;color:var(--ink);border-color:var(--line)}
+button.on{background:var(--soft);color:var(--ink);border-color:var(--accent)}
+button:disabled{opacity:.45;cursor:not-allowed}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.row{display:flex;gap:12px;flex-wrap:wrap}.row>div{flex:1;min-width:150px}
+.hint{color:var(--mute);font-size:.9rem;margin:4px 0}
+.bar{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.tag{display:inline-block;padding:1px 8px;border-radius:99px;border:1px solid var(--line);font-size:.85rem}
+.tag.due{border-color:var(--warn);color:var(--warn)}.tag.done{background:var(--soft)}
+.banner{background:var(--warn);color:#fff;padding:10px 14px;border-radius:8px;margin-bottom:14px}
+.big{font-size:2.4rem;font-weight:bold;text-align:center}
+pre{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;margin:8px 0}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<main>
+<h1>Campaign Manager</h1>
+<p class="sub">Upload lists, write messages, schedule campaigns. Chats open one by one with a forced delay between them. You press Send in WhatsApp.</p>
+<div id="banner"></div>
+<nav id="nav"></nav>
+<div id="view"></div>
+</main>
+
+<script>
+const MIN_DELAY = 40;
+const $ = s => document.querySelector(s);
+const esc = s => String(s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const uid = () => Math.random().toString(36).slice(2,9);
+let S = load(); let tab = 'campaigns'; let running = null; let editing = null; let detail = null; let filt = 'all'; let newFile = null;
+const MAX_MB = 100;
+const ACCEPT = '.jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.mp4,.3gp,.mov,.mkv,.avi,.webm,.mp3,.ogg,.opus,.m4a,.aac,.amr,.wav,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf,.odt,.ods,.odp,.zip,.rar,.7z,.vcf,.apk';
+function idb(){ return new Promise((res,rej) => { const r = indexedDB.open('cm-files',1); r.onupgradeneeded = () => r.result.createObjectStore('f'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+async function idbPut(k,v){ const d = await idb(); return new Promise((res,rej) => { const t = d.transaction('f','readwrite'); t.objectStore('f').put(v,k); t.oncomplete = res; t.onerror = () => rej(t.error); }); }
+async function idbGet(k){ const d = await idb(); return new Promise((res,rej) => { const q = d.transaction('f').objectStore('f').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); }
+async function idbDel(k){ try { const d = await idb(); d.transaction('f','readwrite').objectStore('f').delete(k); } catch(e){} }
+const mb = n => (n/1048576).toFixed(1)+' MB'; let tick = null;
+
+function load(){ try { return Object.assign({lists:[],campaigns:[],lastSend:0}, JSON.parse(localStorage.getItem('cm-data')||'{}')); } catch(e){ return {lists:[],campaigns:[],lastSend:0}; } }
+function save(){ try { localStorage.setItem('cm-data', JSON.stringify(S)); } catch(e){ alert('Could not save. Browser storage may be blocked.'); } }
+
+/* ---------- helpers ---------- */
+function parseCSV(text){
+  const rows = text.split(/\r?\n/).filter(l => l.trim());
+  const split = l => (l.match(/("([^"]|"")*"|[^,;\t]*)([,;\t]|$)/g)||[]).map(x => x.replace(/[,;\t]$/,'').replace(/^"|"$/g,'').replace(/""/g,'"').trim()).slice(0,-1);
+  if (!rows.length) return [];
+  let head = split(rows[0]).map(h => h.toLowerCase());
+  const hasHead = head.includes('phone') || head.includes('number') || head.includes('mobile');
+  const body = hasHead ? rows.slice(1) : rows;
+  if (!hasHead) head = ['name','phone'];
+  const pi = head.findIndex(h => ['phone','number','mobile'].includes(h));
+  return body.map(l => { const c = split(l+','); const o = {}; head.forEach((h,i) => o[h] = c[i]||''); o.phone = c[pi]||''; return o; });
+}
+function cleanNum(raw){
+  let n = String(raw).replace(/[^\d+]/g,'');
+  if (n.startsWith('+')) return n.slice(1);
+  n = n.replace(/^0+/,''); return n.length <= 10 ? '91' + n : n;
+}
+function fill(tpl, c){ return tpl.replace(/\{(\w+)\}/g, (m,k) => (c[k.toLowerCase()] ?? (k.toLowerCase()==='name'?'there':m)) || (k.toLowerCase()==='name'?'there':'')); }
+function fmt(ts){ return ts ? new Date(ts).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}) : 'Not scheduled'; }
+function sentToday(c){ const d = new Date().toDateString(); return Object.values(c.sent||{}).filter(t => new Date(t).toDateString()===d).length; }
+function pending(c){ const L = S.lists.find(l => l.id===c.listId); return L ? L.contacts.filter(p => !(c.sent||{})[p.num] && !(c.skipped||{})[p.num]) : []; }
+function status(c){
+  if (c.done) return 'done';
+  if (!pending(c).length) return 'done';
+  if (c.when && c.when <= Date.now()) return 'due';
+  return c.when ? 'scheduled' : 'draft';
+}
+
+/* ---------- views ---------- */
+function nav(){
+  $('#nav').innerHTML = [['campaigns','Campaigns'],['lists','Contact lists'],['backup','Backup']].map(([k,t]) => `<button class="${tab===k?'on':'g'}" data-t="${k}">${t}</button>`).join('');
+  $('#nav').querySelectorAll('button').forEach(b => b.onclick = () => { tab=b.dataset.t; running=null; detail=null; newFile=null; render(); });
+}
+function render(){ nav(); ({campaigns:vCampaigns,lists:vLists,backup:vBackup})[tab](); banner(); }
+
+function vLists(){
+  $('#view').innerHTML = `
+  <section><h2>Add a contact list</h2>
+  <label>List name</label><input id="ln" placeholder="e.g. Old customers">
+  <label>Upload a CSV or TXT file</label><input type="file" id="lf" accept=".csv,.txt">
+  <label>Or paste contacts</label><textarea id="lt" placeholder="name,phone,city&#10;Amit Patil,9876543210,Pune"></textarea>
+  <p class="hint">First row can be a header. Needs a <b>phone</b> column. Any other column (name, city, ...) becomes a variable like {city}. Without a header, use: Name, Phone. Numbers without a country code get 91.</p>
+  <button id="ls">Save list</button></section>
+  ${S.lists.map(l => `<div class="card bar"><div><b>${esc(l.name)}</b><div class="hint">${l.contacts.length} contacts. Variables: ${Object.keys(l.contacts[0]||{}).filter(k=>k!=='num').map(k=>'{'+k+'}').join(' ')}</div></div><button class="g" data-del="${l.id}">Delete</button></div>`).join('') || '<p class="hint">No lists yet.</p>'}`;
+  $('#lf').onchange = e => { const f = e.target.files[0]; if (f) f.text().then(t => { $('#lt').value = t; if (!$('#ln').value) $('#ln').value = f.name.replace(/\.\w+$/,''); }); };
+  $('#ls').onclick = () => {
+    const seen = new Set(), contacts = [];
+    parseCSV($('#lt').value).forEach(r => { const n = cleanNum(r.phone); if (n.length>=10 && n.length<=15 && !seen.has(n)) { seen.add(n); r.num = n; r.name = r.name||''; contacts.push(r); } });
+    if (!contacts.length) return alert('No valid phone numbers found.');
+    S.lists.push({id:uid(), name:$('#ln').value.trim()||'Untitled list', contacts}); save(); render();
+  };
+  document.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { if (confirm('Delete this list?')) { S.lists = S.lists.filter(l => l.id!==b.dataset.del); save(); render(); } });
+}
+
+function vCampaigns(){
+  if (running) return vRun();
+  if (detail) return vDetail();
+  const c = editing ? S.campaigns.find(x => x.id===editing) : null;
+  const dt = c && c.when ? new Date(c.when - new Date().getTimezoneOffset()*60000).toISOString().slice(0,16) : '';
+  $('#view').innerHTML = `
+  <section><h2>${c?'Edit':'New'} campaign</h2>
+  <div class="row"><div><label>Campaign name</label><input id="cn" value="${esc(c?.name)}"></div>
+  <div><label>Contact list</label><select id="cl">${S.lists.map(l => `<option value="${l.id}" ${c?.listId===l.id?'selected':''}>${esc(l.name)} (${l.contacts.length})</option>`).join('')}</select></div></div>
+  <label>Message</label><textarea id="cm">${esc(c?.msg || 'Hello {name}, we have a new update for you. Reply STOP to opt out.')}</textarea>
+  <p class="hint">Use variables from your list, like {name}. Keep an opt-out line such as "Reply STOP".</p>
+  <label>Attachment (optional)</label><input type="file" id="cf" accept="${ACCEPT}">
+  <p class="hint" id="cfi">${c?.file ? 'Current file: '+esc(c.file.name)+' ('+mb(c.file.size)+'). Choose a new file to replace it.' : 'No file selected.'}</p>
+  ${c?.file ? '<label style="font-weight:normal"><input type="checkbox" id="crm" style="width:auto"> Remove current attachment</label>' : ''}
+  <p class="hint">Images, video, audio, PDF, Word, Excel, PowerPoint, text, CSV, ZIP and more. Up to ${MAX_MB} MB. WhatsApp cannot receive a file through a link, so you attach it in each chat (the Send screen makes this one click).</p>
+  <div class="row"><div><label>Start at</label><input type="datetime-local" id="cw" value="${dt}"></div>
+  <div><label>Delay between chats (seconds, minimum ${MIN_DELAY})</label><input type="number" id="cd" min="${MIN_DELAY}" value="${c?.delay||MIN_DELAY}"></div>
+  <div><label>Daily limit</label><input type="number" id="cq" min="1" value="${c?.daily||50}"></div></div>
+  <p style="margin-top:12px"><button id="cs">${c?'Update':'Create'} campaign</button> ${c?'<button class="g" id="cx">Cancel</button>':''}</p></section>
+  ${S.campaigns.map(k => { const st = status(k), L = S.lists.find(l=>l.id===k.listId); return `<div class="card"><div class="bar"><div><a href="#" data-vw="${k.id}" style="color:var(--accent);font-weight:bold">${esc(k.name)}</a> <span class="tag ${st}">${st==='due'?'Ready to send':st}</span>
+  <div class="hint">${esc(L?.name||'List missing')}. Starts: ${fmt(k.when)}. Sent ${Object.keys(k.sent||{}).length} of ${L?.contacts.length||0}. Today ${sentToday(k)}/${k.daily}.</div></div>
+  <div><button class="g" data-vw="${k.id}">View sent status</button> <button data-run="${k.id}" ${st==='done'||!L?'disabled':''}>Run</button> <button class="g" data-ed="${k.id}">Edit</button> <button class="g" data-rm="${k.id}">Delete</button></div></div></div>`; }).join('') || '<p class="hint">No campaigns yet. Add a contact list first, then create a campaign.</p>'}`;
+  $('#cf').onchange = e => { const f = e.target.files[0]; if (!f) { newFile=null; return; }
+    if (f.size > MAX_MB*1048576) { alert('File is larger than '+MAX_MB+' MB.'); e.target.value=''; newFile=null; return; }
+    newFile = f; $('#cfi').textContent = 'Selected: '+f.name+' ('+mb(f.size)+')'; };
+  $('#cs').onclick = async () => {
+    if (!S.lists.length) return alert('Add a contact list first.');
+    const o = {name:$('#cn').value.trim()||'Untitled', listId:$('#cl').value, msg:$('#cm').value, when:$('#cw').value?new Date($('#cw').value).getTime():0, delay:Math.max(MIN_DELAY,+$('#cd').value||MIN_DELAY), daily:+$('#cq').value||50};
+    const id = c ? c.id : uid();
+    try {
+      if (newFile) { await idbPut(id, newFile); o.file = {name:newFile.name, type:newFile.type, size:newFile.size}; }
+      else if (c && $('#crm') && $('#crm').checked) { await idbDel(id); o.file = null; }
+    } catch(e){ alert('Could not store the attachment in this browser.'); }
+    if (c) Object.assign(c, o, {notified:false}); else S.campaigns.push(Object.assign({id, sent:{}}, o));
+    newFile = null; editing = null; save(); render();
+  };
+  if ($('#cx')) $('#cx').onclick = () => { editing=null; newFile=null; render(); };
+  document.querySelectorAll('[data-vw]').forEach(b => b.onclick = e => { e.preventDefault(); detail=b.dataset.vw; filt='all'; render(); });
+  document.querySelectorAll('[data-run]').forEach(b => b.onclick = () => { running=b.dataset.run; render(); });
+  document.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => { editing=b.dataset.ed; render(); scrollTo(0,0); });
+  document.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { if (confirm('Delete this campaign?')) { idbDel(b.dataset.rm); S.campaigns = S.campaigns.filter(k=>k.id!==b.dataset.rm); save(); render(); } });
+}
+
+function vRun(){
+  const c = S.campaigns.find(x => x.id===running), nx = pending(c)[0], today = sentToday(c);
+  const wait = Math.max(0, Math.ceil((S.lastSend + c.delay*1000 - Date.now())/1000));
+  const capped = today >= c.daily;
+  if (!nx) { $('#view').innerHTML = `<section><h2>${esc(c.name)} is finished</h2><p>All contacts have been processed.</p><button id="bk">Back</button></section>`; $('#bk').onclick = () => { running=null; render(); }; return; }
+  const text = fill(c.msg, nx);
+  $('#view').innerHTML = `<section><div class="bar"><h2>${esc(c.name)}</h2><button class="g" id="bk">Back</button></div>
+  <p class="hint">Today ${today}/${c.daily}. Remaining in this campaign: ${pending(c).length}.</p>
+  <p><b>Next:</b> ${esc(nx.name||'(no name)')} (+${nx.num})</p><pre>${esc(text)}</pre>
+  ${capped ? '<p class="warn" style="color:var(--warn)">Daily limit reached. Continue tomorrow.</p>' : wait>0 ? `<div class="big" id="cdw">${wait}s</div><p class="hint" style="text-align:center">Wait before opening the next chat.</p>` : ''}
+  ${c.file ? `<div class="card" style="margin:12px 0"><b>Attachment:</b> ${esc(c.file.name)} (${mb(c.file.size)})
+  <p class="hint">After the chat opens, attach this file with the paperclip button, then press Send.</p>
+  <button class="g" id="fdl">Download file</button> ${/^image\//.test(c.file.type)?'<button class="g" id="fcp">Copy image (then Ctrl+V in chat)</button> ':''}${navigator.canShare?'<button class="g" id="fsh">Share file (phone)</button>':''}</div>` : ''}
+  <p style="text-align:center"><button id="go" ${capped||wait>0?'disabled':''}>Open chat and mark as sent</button> <button class="g" id="sk">Skip this contact</button></p>
+  <p class="hint">Press Send in WhatsApp, then return to this tab. Keep this tab open.</p></section>`;
+  $('#bk').onclick = () => { running=null; detail=c.id; render(); };
+  $('#sk').onclick = () => { c.skipped = c.skipped||{}; c.skipped[nx.num] = Date.now(); save(); render(); };
+  if (c.file) {
+    const getF = async () => { const b = await idbGet(c.id); if (!b) throw 0; return b; };
+    $('#fdl').onclick = async () => { try { const b = await getF(); const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = c.file.name; a.click(); } catch(e){ alert('Attachment not found. Edit the campaign and upload it again.'); } };
+    if ($('#fcp')) $('#fcp').onclick = async () => { try {
+      const bmp = await createImageBitmap(await getF()); const cv = document.createElement('canvas'); cv.width = bmp.width; cv.height = bmp.height; cv.getContext('2d').drawImage(bmp,0,0);
+      const png = await new Promise(r => cv.toBlob(r,'image/png')); await navigator.clipboard.write([new ClipboardItem({'image/png':png})]); alert('Image copied. Open the chat and press Ctrl+V.');
+    } catch(e){ alert('Copy is not supported here. Use Download file instead.'); } };
+    if ($('#fsh')) $('#fsh').onclick = async () => { try { const f = new File([await getF()], c.file.name, {type:c.file.type}); await navigator.share({files:[f], text:text}); } catch(e){} };
+  }
+  $('#go').onclick = () => {
+    window.open('https://wa.me/'+nx.num+'?text='+encodeURIComponent(text), '_blank', 'noopener');
+    c.sent[nx.num] = Date.now(); S.lastSend = Date.now(); save(); render();
+  };
+}
+
+function vDetail(){
+  const c = S.campaigns.find(x => x.id===detail), L = S.lists.find(l => l.id===c?.listId);
+  if (!c || !L) { detail=null; return render(); }
+  c.skipped = c.skipped||{};
+  const rows = L.contacts.map(p => c.sent[p.num] ? {p, st:'sent', t:c.sent[p.num]} : c.skipped[p.num] ? {p, st:'skipped', t:c.skipped[p.num]} : {p, st:'pending', t:0});
+  const n = k => rows.filter(r => r.st===k).length;
+  const shown = filt==='all' ? rows : rows.filter(r => r.st===filt);
+  $('#view').innerHTML = `<section><div class="bar"><h2>${esc(c.name)}</h2><div><button class="g" id="bk">Back</button> <button id="rn" ${n('pending')?'':'disabled'}>Run</button></div></div>
+  <p class="hint">Message: ${esc(c.msg)}</p>
+  <p><b>${n('sent')}</b> sent, <b>${n('pending')}</b> not sent yet, <b>${n('skipped')}</b> skipped, of ${rows.length}.</p>
+  <p>${[['all','All'],['sent','Sent'],['pending','Not sent'],['skipped','Skipped']].map(([k,t]) => `<button class="${filt===k?'on':'g'}" data-f="${k}">${t}</button>`).join(' ')} <button class="g" id="dl">Download report CSV</button></p>
+  <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+  <tr style="text-align:left"><th>Name</th><th>Phone</th><th>Status</th><th>Time</th><th></th></tr>
+  ${shown.map(r => `<tr style="border-top:1px solid var(--line)"><td>${esc(r.p.name)}</td><td>+${r.p.num}</td><td><span class="tag ${r.st==='sent'?'done':''}">${r.st==='sent'?'Sent':r.st==='pending'?'Not sent':'Skipped'}</span></td><td>${r.t?fmt(r.t):''}</td><td>${r.st!=='pending'?`<button class="g" data-undo="${r.p.num}">Undo</button>`:''}</td></tr>`).join('')}
+  </table></div></section>`;
+  $('#bk').onclick = () => { detail=null; render(); };
+  $('#rn').onclick = () => { running=c.id; render(); };
+  document.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { filt=b.dataset.f; render(); });
+  document.querySelectorAll('[data-undo]').forEach(b => b.onclick = () => { delete c.sent[b.dataset.undo]; delete c.skipped[b.dataset.undo]; save(); render(); });
+  $('#dl').onclick = () => {
+    const q = v => '"'+String(v).replace(/"/g,'""')+'"';
+    const csv = 'name,phone,status,time\n' + rows.map(r => [r.p.name, '+'+r.p.num, r.st, r.t?new Date(r.t).toLocaleString():''].map(q).join(',')).join('\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv'})); a.download = c.name+'-report.csv'; a.click();
+  };
+}
+
+function vBackup(){
+  $('#view').innerHTML = `<section><h2>Backup</h2><p class="hint">Data lives in this browser only. Export regularly, and import to move to another device.</p>
+  <button id="ex">Export JSON</button> <input type="file" id="im" accept=".json" style="margin-top:12px"></section>`;
+  $('#ex').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'})); a.download = 'campaign-backup.json'; a.click(); };
+  $('#im').onchange = e => e.target.files[0].text().then(t => { try { S = Object.assign({lists:[],campaigns:[],lastSend:0}, JSON.parse(t)); save(); render(); } catch(x){ alert('Invalid backup file.'); } });
+}
+
+/* ---------- scheduler ---------- */
+function banner(){
+  const due = S.campaigns.filter(c => status(c)==='due');
+  $('#banner').innerHTML = due.length ? `<div class="banner">Ready to send: ${due.map(c=>esc(c.name)).join(', ')}. Open the Campaigns tab and press Run.</div>` : '';
+}
+function checkDue(){
+  S.campaigns.forEach(c => { if (status(c)==='due' && !c.notified) {
+    c.notified = true; save();
+    try { if ('Notification' in window && Notification.permission==='granted') new Notification('Campaign ready', {body:c.name+' is ready to send.'}); } catch(e){}
+    document.title = '(!) Campaign ready';
+  }});
+  if (!S.campaigns.some(c => status(c)==='due')) document.title = 'Campaign Manager';
+  banner();
+  if (running && tab==='campaigns') {
+    const c = S.campaigns.find(x=>x.id===running), w = Math.max(0, Math.ceil((S.lastSend + c.delay*1000 - Date.now())/1000));
+    const el = $('#cdw'); if (el) { if (w>0) el.textContent = w+'s'; else render(); }
+  }
+}
+try { if ('Notification' in window && Notification.permission==='default') Notification.requestPermission(); } catch(e){}
+setInterval(checkDue, 1000);
+render(); checkDue();
+</script>
+</body>
+</html>
